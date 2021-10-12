@@ -14,7 +14,7 @@ shutdown_volumes:
 	docker-compose down -v
 
 startup: shutdown
-	docker compose --profile db up
+	docker compose --profile superset up
 
 
 	

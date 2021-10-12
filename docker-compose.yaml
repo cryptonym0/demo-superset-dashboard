@@ -1,9 +1,101 @@
 version: "3.8"
 
-services:
 
+x-superset-image: &superset-image apache/superset:latest-dev
+x-superset-depends-on: &superset-depends-on
+  - db
+  - redis
+x-superset-volumes: &superset-volumes
+  # /app/pythonpath_docker will be appended to the PYTHONPATH in the final container
+  - ./docker:/app/docker
+  - superset_home:/app/superset_home
+
+services:
+  # Superset services
+  redis:
+    image: redis:latest
+    container_name: superset_cache
+    restart: unless-stopped
+    volumes:
+      - redis:/data
+    networks:
+      - network
+    profiles:
+      - superset
+
+  db:
+    env_file: docker/.env-non-dev
+    image: postgres:10
+    container_name: superset_db
+    restart: unless-stopped
+    volumes:
+      - db_home:/var/lib/postgresql/data
+    networks:
+      - network
+    profiles:
+      - superset
+
+  superset:
+    env_file: docker/.env-non-dev
+    image: *superset-image
+    container_name: superset_app
+    command: ["/app/docker/docker-bootstrap.sh", "app-gunicorn"]
+    user: "root"
+    restart: unless-stopped
+    ports:
+      - 8088:8088
+    depends_on: *superset-depends-on
+    volumes: *superset-volumes
+    networks:
+      - network
+    profiles:
+      - superset
+  
+  superset-init:
+    image: *superset-image
+    container_name: superset_init
+    command: ["/app/docker/docker-init.sh"]
+    env_file: docker/.env-non-dev
+    depends_on: *superset-depends-on
+    user: "root"
+    volumes: *superset-volumes
+    networks:
+      - network
+    profiles:
+      - superset
+
+  superset-worker:
+    image: *superset-image
+    container_name: superset_worker
+    command: ["/app/docker/docker-bootstrap.sh", "worker"]
+    env_file: docker/.env-non-dev
+    restart: unless-stopped
+    depends_on: *superset-depends-on
+    user: "root"
+    volumes: *superset-volumes
+    networks:
+      - network
+    profiles:
+      - superset
+
+  superset-worker-beat:
+    image: *superset-image
+    container_name: superset_worker_beat
+    command: ["/app/docker/docker-bootstrap.sh", "beat"]
+    env_file: docker/.env-non-dev
+    restart: unless-stopped
+    depends_on: *superset-depends-on
+    user: "root"
+    volumes: *superset-volumes
+    networks:
+      - network
+    profiles:
+      - superset
+
+  # Additional Data Services
 
   generator-service:
+    container_name: application_db_data_generator
     build:
       context: ./app
       dockerfile: Dockerfile
@@ -11,25 +103,26 @@ services:
     command: crontab.sh
     environment:
       SHELL: /bin/bash 
+    restart: unless-stopped
     depends_on:
       - migration_service
     networks:
       - network
     profiles:
-      - db
-    
-    
+      - application_db
+      - superset
 
   migration-service:
+    container_name: application_db_migration_service
     build:
       context: ./database
       dockerfile: Dockerfile.flyway
     entrypoint: flyway
     command: migrate
     depends_on:
-      - db
+      - application_db
     environment:
-      FLYWAY_URL: jdbc:postgresql://db:5432/demo # jdbc:postgresql://[host]:[port]/[database]
+      FLYWAY_URL: jdbc:postgresql://application_db:5432/demo # jdbc:postgresql://[host]:[port]/[database]
       FLYWAY_USER: postgres
       FLYWAY_PASSWORD: docker
       FLYWAY_CONNECT_RETRIES: 100
@@ -40,9 +133,11 @@ services:
     networks:
       - network
     profiles:
-      - db
+      - application_db
+      - superset
 
-  db:
+  application_db:
+    container_name: application_db
     build:
         context: ./database
         dockerfile: Dockerfile.postgres
@@ -53,18 +148,26 @@ services:
       POSTGRES_SCHEMA: demo
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: docker
+    restart: unless-stopped
     ports:
-      - 5432:5432
+      - 5433:5432
     networks:
       - network
     volumes:
-      - db:/var/lib/mysql
+      - application_db:/var/lib/mysql
     profiles:
-      - db
+      - application_db
+      - superset
 
 volumes:
-  db:
+  application_db:
     driver: local
+  superset_home:
+    external: false
+  db_home:
+    external: false
+  redis:
+    external: false
   
 # A local docker network.
 networks:
